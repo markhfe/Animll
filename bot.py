@@ -57,6 +57,17 @@ def create_short_id(long_string):
     return short_id
 
 def send_shikimori_info(chat_id, title):
+    # ... остальной код без изменений ...
+
+    try:
+        # ... получение данных с API ...
+        description = anime_details.get('description', 'Описание недоступно.')
+
+        # Чистим описание от тегов [character=...][/character]
+        description = clean_description(description)
+
+        # ... дальше остальной код ...
+
     headers = {
         "User-Agent": ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
                        "AppleWebKit/537.36 (KHTML, like Gecko) "
