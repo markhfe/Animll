@@ -56,7 +56,7 @@ def create_short_id(long_string):
     callback_storage[short_id] = long_string
     return short_id
 
-def send_shikimori_info(chat_id, title):
+def send_shikimori_info(chat_id, title, user_id=None):
     headers = {
         "User-Agent": ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
                        "AppleWebKit/537.36 (KHTML, like Gecko) "
@@ -114,17 +114,23 @@ def send_shikimori_info(chat_id, title):
         import re
         description_text = re.sub(r'<[^>]+>', '', description_raw)  # удаляем все HTML теги
 
-        # --- Удаляем всё после ключевого слова "Персонажи" или "Characters" ---
+        # --- Удаляем всё после ключевого слова "Персонажи" или "Characters" для краткого описания ---
         cut_points = ['Персонажи', 'Characters', 'character', 'Персонаж', 'персонаж']
+        short_description = description_text
         for point in cut_points:
-            idx = description_text.find(point)
+            idx = short_description.find(point)
             if idx != -1:
-                description_text = description_text[:idx].strip()
+                short_description = short_description[:idx].strip()
                 break
 
-        # Можно дополнительно убрать пустые строки
-        description_lines = [line.strip() for line in description_text.split('\n') if line.strip()]
-        description_clean = "\n".join(description_lines)
+        # Убираем пустые строки
+        description_lines = [line.strip() for line in short_description.split('\n') if line.strip()]
+        short_description_clean = "\n".join(description_lines)
+
+        # Ограничим длину короткого описания для телеги (макс 600 символов)
+        MAX_DESC_LEN = 600
+        if len(short_description_clean) > MAX_DESC_LEN:
+            short_description_clean = short_description_clean[:MAX_DESC_LEN].rsplit(' ', 1)[0] + "..."
 
         year = anime_details.get('aired_on')
         if year:
@@ -138,12 +144,28 @@ def send_shikimori_info(chat_id, title):
         else:
             image_url = None
 
-        caption = f"🎬 <b>{title_ru}</b>\n📅 {year}\n\n📝 {description_clean}"
+        caption = f"🎬 <b>{title_ru}</b>\n📅 {year}\n\n📝 {short_description_clean}"
+
+        # Сохраняем полное описание в callback_storage, если передан user_id
+        # Для ключа используем md5 от названия и user_id, чтобы уникально
+        full_desc_key = None
+        if user_id:
+            import hashlib
+            key_str = f"fulldesc_{title}_{user_id}"
+            key_hash = hashlib.md5(key_str.encode()).hexdigest()
+            full_desc_key = key_hash
+            callback_storage[full_desc_key] = description_text  # сохраняем полное описание (не очищенное)
+
+        # Добавим кнопку "Показать полное описание" если user_id есть
+        markup = None
+        if full_desc_key:
+            markup = types.InlineKeyboardMarkup()
+            markup.add(types.InlineKeyboardButton("📝 Показать полное описание", callback_data=full_desc_key))
 
         if image_url:
-            bot.send_photo(chat_id, photo=image_url, caption=caption, parse_mode="HTML")
+            bot.send_photo(chat_id, photo=image_url, caption=caption, parse_mode="HTML", reply_markup=markup)
         else:
-            bot.send_message(chat_id, caption, parse_mode="HTML")
+            bot.send_message(chat_id, caption, parse_mode="HTML", reply_markup=markup)
 
         return True
 
@@ -151,6 +173,20 @@ def send_shikimori_info(chat_id, title):
         print(f"Ошибка при получении данных с Shikimori: {e}")
         return False
 
+
+@bot.callback_query_handler(func=lambda call: call.data in callback_storage)
+def full_description_handler(call):
+    # Выводим полное описание по ключу
+    full_desc = callback_storage.get(call.data)
+    if full_desc:
+        # Ограничение в 4096 символов на сообщение, делим, если нужно
+        MAX_MSG_LEN = 4000
+        messages = [full_desc[i:i+MAX_MSG_LEN] for i in range(0, len(full_desc), MAX_MSG_LEN)]
+        for msg in messages:
+            bot.send_message(call.message.chat.id, msg, parse_mode="HTML")
+        bot.answer_callback_query(call.id)
+    else:
+        bot.answer_callback_query(call.id, "Полное описание недоступно.", show_alert=True)
 
 def generate_episode_keyboard(anime, episode, user_id):
     markup = types.InlineKeyboardMarkup(row_width=3)
