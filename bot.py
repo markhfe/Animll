@@ -1,45 +1,41 @@
-import os
-import re
-import time
-import json
-import hashlib
+import telebot
 import requests
 import csv
+import time
+import re
+import json
+import hashlib
 from io import StringIO
-from telebot import TeleBot, types
+from telebot import types
 
-# ----------------------------------------
-# Инициализация бота и константы
-bot = TeleBot(os.getenv("TELEGRAM_TOKEN"))  # Токен из переменной окружения
-ADMIN_ID = os.getenv("TELEGRAM_ID")         # ID администратора (если нужен)
+import os
 
-# ----------------------------------------
-# Загрузка и обработка базы аниме из Google Sheets (CSV)
+bot = telebot.TeleBot(os.getenv("TELEGRAM_TOKEN"))  # Получить токен из переменной окружения
+ADMIN_ID = os.getenv("TELEGRAM_ID")  # Получить id из переменной окружения
+
 def load_anime_db():
     url = "https://docs.google.com/spreadsheets/d/10dD8Hhf-uVxuloE6yy0p8hdswbW7xGrNR_6otJTbKuA/export?format=csv&gid=0"
-    try:
-        response = requests.get(url)
-        response.raise_for_status()
-        data = response.content.decode('utf-8')
-        reader = csv.DictReader(StringIO(data))
+    response = requests.get(url)
+    data = response.content.decode('utf-8')
+    reader = csv.DictReader(StringIO(data))
 
-        anime_db = {}
-        for row in reader:
-            anime = row['Anime']
-            episode = row['Episode']
-            dubbing = row['Dubbing Name']
-            link = row['Link']
+    anime_db = {}
+    for row in reader:
+        anime = row['Anime']
+        episode = row['Episode']
+        dubbing = row['Dubbing Name']
+        link = row['Link']
 
-            anime_db.setdefault(anime, {}).setdefault(episode, {})[dubbing] = link
-        return anime_db
-    except Exception as e:
-        print(f"Ошибка при загрузке базы аниме: {e}")
-        return {}
+        if anime not in anime_db:
+            anime_db[anime] = {}
+        if episode not in anime_db[anime]:
+            anime_db[anime][episode] = {}
+
+        anime_db[anime][episode][dubbing] = link
+    return anime_db
 
 anime_db = load_anime_db()
 
-# ----------------------------------------
-# Работа с данными пользователей
 def load_user_data():
     try:
         with open('user_data.json', 'r', encoding='utf-8') as f:
@@ -53,25 +49,18 @@ def save_user_data():
 
 user_data = load_user_data()
 
-# ----------------------------------------
-# Хранилище callback данных для кнопок
 callback_storage = {}
-
 def create_short_id(long_string):
     hash_obj = hashlib.md5(long_string.encode())
     short_id = hash_obj.hexdigest()[:16]
     callback_storage[short_id] = long_string
     return short_id
 
-# ----------------------------------------
-# Получение информации с Shikimori API
 def send_shikimori_info(chat_id, title):
     headers = {
-        "User-Agent": (
-            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-            "AppleWebKit/537.36 (KHTML, like Gecko) "
-            "Chrome/114.0.0.0 Safari/537.36"
-        )
+        "User-Agent": ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                       "AppleWebKit/537.36 (KHTML, like Gecko) "
+                       "Chrome/114.0.0.0 Safari/537.36")
     }
     retries = 2
     timeout_sec = 15
@@ -106,7 +95,6 @@ def send_shikimori_info(chat_id, title):
         details_response = request_with_retry(details_url)
         anime_details = details_response.json()
 
-        # Если нет русского названия, пробуем альтернативный поиск по английскому имени
         if not anime_details.get('russian') and anime_details.get('name'):
             alt_search_url = f"https://shikimori.one/api/animes?search={anime_details['name']}"
             alt_response = request_with_retry(alt_search_url)
@@ -120,12 +108,18 @@ def send_shikimori_info(chat_id, title):
                     anime_details = details_response.json()
 
         title_ru = anime_details.get('russian') or anime_details.get('name') or "Без названия"
-        description = anime_details.get('description', 'Описание недоступно.').replace('<br>', '\n')
+        description = anime_details.get('description', 'Описание недоступно.')
         year = anime_details.get('aired_on')
-        year = year[:4] if year else "Год неизвестен"
+        if year:
+            year = year[:4]
+        else:
+            year = "Год неизвестен"
 
         image_info = anime_details.get('image')
-        image_url = f"https://shikimori.one{image_info['original']}" if image_info and image_info.get('original') else None
+        if image_info and image_info.get('original'):
+            image_url = f"https://shikimori.one{image_info['original']}"
+        else:
+            image_url = None
 
         caption = f"🎬 <b>{title_ru}</b>\n📅 {year}\n\n📝 {description}"
 
@@ -135,19 +129,18 @@ def send_shikimori_info(chat_id, title):
             bot.send_message(chat_id, caption, parse_mode="HTML")
 
         return True
+
     except Exception as e:
         print(f"Ошибка при получении данных с Shikimori: {e}")
         return False
 
-# ----------------------------------------
-# Генерация клавиатур для выбора серии и аниме
 def generate_episode_keyboard(anime, episode, user_id):
     markup = types.InlineKeyboardMarkup(row_width=3)
-
+    
     episodes = sorted(anime_db[anime].keys(), key=lambda x: int(x) if x.isdigit() else x)
     current_index = episodes.index(episode)
-
-    # Кнопки навигации между эпизодами
+    
+    # Кнопки навигации
     nav_buttons = []
     if current_index > 0:
         prev_ep = episodes[current_index - 1]
@@ -155,27 +148,27 @@ def generate_episode_keyboard(anime, episode, user_id):
         nav_buttons.append(types.InlineKeyboardButton("⬅️", callback_data=prev_id))
     else:
         nav_buttons.append(types.InlineKeyboardButton(" ", callback_data="empty"))
-
+    
     nav_buttons.append(types.InlineKeyboardButton(f"Серия {episode}", callback_data="empty"))
-
+    
     if current_index < len(episodes) - 1:
         next_ep = episodes[current_index + 1]
         next_id = create_short_id(f"episode_{anime}|{next_ep}_{user_id}")
         nav_buttons.append(types.InlineKeyboardButton("➡️", callback_data=next_id))
     else:
         nav_buttons.append(types.InlineKeyboardButton(" ", callback_data="empty"))
-
+    
     markup.row(*nav_buttons)
-
+    
     # Кнопки озвучек
     for dubbing_name in anime_db[anime][episode]:
         dub_id = create_short_id(f"dubbing_{anime}|{episode}|{dubbing_name}_{user_id}")
         markup.add(types.InlineKeyboardButton(dubbing_name, callback_data=dub_id))
-
+    
     # Кнопка "Назад к аниме"
     back_id = create_short_id(f"anime_{anime}_{user_id}")
     markup.add(types.InlineKeyboardButton("🔙 Назад к аниме", callback_data=back_id))
-
+    
     return markup
 
 def generate_anime_keyboard(anime, user_id):
@@ -184,18 +177,15 @@ def generate_anime_keyboard(anime, user_id):
     user_favs = set(user_data.get(user_str_id, {}).get('favorites', []))
     user_notifs = set(user_data.get(user_str_id, {}).get('notifications', []))
 
-    # Кнопка "Избранное / Убрать из избранного"
     fav_text = "💔 Убрать из любимых" if anime in user_favs else "❤️ В избранное"
     fav_id = create_short_id(f"favtoggle_{anime}_{user_id}")
     markup.add(types.InlineKeyboardButton(fav_text, callback_data=fav_id))
 
-    # Кнопка уведомлений, если в избранном
     if anime in user_favs:
         notif_text = "🔕 Отключить уведомления" if anime in user_notifs else "🔔 Включить уведомления"
         notif_id = create_short_id(f"notiftoggle_{anime}_{user_id}")
         markup.add(types.InlineKeyboardButton(notif_text, callback_data=notif_id))
 
-    # Кнопка для выбора серии (первая по порядку)
     episodes = sorted(anime_db[anime].keys(), key=lambda x: int(x) if x.isdigit() else x)
     if episodes:
         first_ep_id = create_short_id(f"episode_{anime}|{episodes[0]}_{user_id}")
@@ -203,8 +193,6 @@ def generate_anime_keyboard(anime, user_id):
 
     return markup
 
-# ----------------------------------------
-# Уведомления пользователей о новых сериях (можно запускать в фоне)
 def send_notification(anime):
     sent_count = 0
     for user_str_id, data_dict in user_data.items():
@@ -218,147 +206,138 @@ def send_notification(anime):
 
 def periodic_check():
     while True:
-        try:
-            new_db = load_anime_db()
-            # Здесь можно реализовать логику сравнения с предыдущей версией anime_db для определения новых серий
-            # Если есть новые серии, отправлять уведомления через send_notification()
-            # Обновляем глобальную базу
-            global anime_db
-            anime_db = new_db
-        except Exception as e:
-            print(f"Ошибка при периодической проверке: {e}")
-        time.sleep(900)  # Проверять каждые 15 минут
+        if anime_db:
+            first_anime = next(iter(anime_db))
+            send_notification(first_anime)
+        time.sleep(3600)
 
-# ----------------------------------------
-# Обработчики команд и сообщений
-
-@bot.message_handler(commands=["start"])
+@bot.message_handler(commands=['start'])
 def start_message(message):
-    user_id = str(message.from_user.id)
-    user_data.setdefault(user_id, {"favorites": [], "notifications": []})
-    save_user_data()
-
-    text = (
-        "Привет! Я — бот для просмотра аниме.\n"
-        "Введите название аниме для поиска или воспользуйтесь меню."
+    user_id = message.from_user.id
+    user_str_id = str(user_id)
+    if user_str_id not in user_data:
+        user_data[user_str_id] = {"favorites": [], "notifications": []}
+        save_user_data()
+    bot.send_message(
+        message.chat.id,
+        "👋 Привет! Я бот для поиска и просмотра аниме!\n\n"
+        "Вот что я умею:\n"
+        "🔍 Найду аниме по названию\n"
+        "🎬 Покажу описание и картинку с Shikimori\n"
+        "📺 Дам ссылки на серии с разными озвучками\n\n"
+        "Просто напиши название аниме, и я всё сделаю сам 😊"
     )
-    bot.send_message(message.chat.id, text)
 
-@bot.message_handler(commands=["help"])
-def help_message(message):
-    help_text = (
-        "📖 Команды бота:\n"
-        "/start - начать работу с ботом\n"
-        "Введите название аниме для поиска\n"
-        "Используйте кнопки для выбора серии и озвучки."
-    )
-    bot.send_message(message.chat.id, help_text)
-
-@bot.message_handler(func=lambda m: True)
-def handle_anime_search(message):
-    user_id = str(message.from_user.id)
-    query = message.text.strip()
-
-    # Поиск совпадений в anime_db по названию (регистронезависимо)
-    found_animes = [anime for anime in anime_db.keys() if query.lower() in anime.lower()]
-
-    if not found_animes:
-        # Попробуем получить инфо с Shikimori API
-        if send_shikimori_info(message.chat.id, query):
-            return
-        bot.send_message(message.chat.id, "Аниме не найдено. Попробуйте другое название.")
-        return
-
-    # Если найдено много аниме — предложить выбор
-    markup = types.InlineKeyboardMarkup(row_width=1)
-    for anime in found_animes:
-        anime_id = create_short_id(f"anime_{anime}_{user_id}")
-        markup.add(types.InlineKeyboardButton(anime, callback_data=anime_id))
-    bot.send_message(message.chat.id, "Выберите аниме:", reply_markup=markup)
-
-# ----------------------------------------
-# Обработка нажатий на кнопки
 @bot.callback_query_handler(func=lambda call: True)
 def callback_handler(call):
-    user_id = str(call.from_user.id)
+    user_id = call.from_user.id
+    user_str_id = str(user_id)
     data = call.data
-
     if data == "empty":
         bot.answer_callback_query(call.id)
         return
-
-    long_data = callback_storage.get(data)
-    if not long_data:
-        bot.answer_callback_query(call.id, "Истёк срок действия кнопки. Попробуйте снова.")
+    if data not in callback_storage:
+        bot.answer_callback_query(call.id, "Данные устарели, попробуйте снова.", show_alert=True)
         return
+    full_data = callback_storage[data]
+    parts = full_data.split('_', 1)
+    action = parts[0]
 
-    # Разбор длинных данных
-    if long_data.startswith("anime_"):
-        # Выбрано аниме — показать клавиатуру с сериями и настройками
-        anime = long_data[len("anime_"):].rsplit("_", 1)[0]
-        markup = generate_anime_keyboard(anime, call.from_user.id)
-        bot.edit_message_text(f"Вы выбрали аниме: <b>{anime}</b>", call.message.chat.id, call.message.message_id, parse_mode="HTML", reply_markup=markup)
-        bot.answer_callback_query(call.id)
-
-    elif long_data.startswith("episode_"):
-        # Выбор серии
-        match = re.match(r"episode_(.+)\|(.+)_(\d+)", long_data)
-        if not match:
-            bot.answer_callback_query(call.id, "Ошибка данных.")
+    if action == "anime":
+        m = re.match(r'anime_(.+)_(\d+)$', full_data)
+        if not m or int(m.group(2)) != user_id:
+            bot.answer_callback_query(call.id, "Неверные данные.", show_alert=True)
             return
-        anime, episode, uid = match.groups()
-        markup = generate_episode_keyboard(anime, episode, int(uid))
-        bot.edit_message_text(f"Вы выбрали серию <b>{episode}</b> аниме <b>{anime}</b>", call.message.chat.id, call.message.message_id, parse_mode="HTML", reply_markup=markup)
+        anime_name = m.group(1)
+        if not send_shikimori_info(call.message.chat.id, anime_name):
+            bot.send_message(call.message.chat.id, "Информация не найдена.")
+        markup = generate_anime_keyboard(anime_name, user_id)
+        bot.send_message(call.message.chat.id, f"🎬 <b>{anime_name}</b>", reply_markup=markup, parse_mode="HTML")
         bot.answer_callback_query(call.id)
 
-    elif long_data.startswith("dubbing_"):
-        # Выбор озвучки - отправка ссылки
-        match = re.match(r"dubbing_(.+)\|(.+)\|(.+)_(\d+)", long_data)
-        if not match:
-            bot.answer_callback_query(call.id, "Ошибка данных.")
+    elif action == "episode":
+        m = re.match(r'episode_(.+)\|(.+)_(\d+)$', full_data)
+        if not m or int(m.group(3)) != user_id:
+            bot.answer_callback_query(call.id, "Неверные данные.", show_alert=True)
             return
-        anime, episode, dubbing, uid = match.groups()
-        link = anime_db.get(anime, {}).get(episode, {}).get(dubbing)
-        if link:
-            bot.send_message(call.message.chat.id, f"Ссылка на {anime} серия {episode} ({dubbing}):\n{link}")
-        else:
-            bot.send_message(call.message.chat.id, "Ссылка не найдена.")
+        anime_name, episode = m.group(1), m.group(2)
+        if anime_name not in anime_db or episode not in anime_db[anime_name]:
+            bot.answer_callback_query(call.id, "Данные не найдены.", show_alert=True)
+            return
+        markup = generate_episode_keyboard(anime_name, episode, user_id)
+        bot.edit_message_reply_markup(call.message.chat.id, call.message.message_id, reply_markup=markup)
         bot.answer_callback_query(call.id)
 
-    elif long_data.startswith("favtoggle_"):
-        # Добавить или убрать из избранного
-        anime = long_data[len("favtoggle_"):].rsplit("_", 1)[0]
-        favs = user_data.setdefault(user_id, {}).setdefault("favorites", [])
-        if anime in favs:
-            favs.remove(anime)
-            bot.answer_callback_query(call.id, f"Удалено из избранного: {anime}")
+    elif action == "dubbing":
+        m = re.match(r'dubbing_(.+)\|(.+)\|(.+)_(\d+)$', full_data)
+        if not m or int(m.group(4)) != user_id:
+            bot.answer_callback_query(call.id, "Неверные данные.", show_alert=True)
+            return
+        anime_name, episode, dubbing_name = m.group(1), m.group(2), m.group(3)
+        if (anime_name not in anime_db or episode not in anime_db[anime_name] or
+                dubbing_name not in anime_db[anime_name][episode]):
+            bot.answer_callback_query(call.id, "Данные не найдены.", show_alert=True)
+            return
+        link = anime_db[anime_name][episode][dubbing_name]
+        bot.send_message(call.message.chat.id, f"Вот ссылка на {dubbing_name} для серии {episode}:\n{link}")
+        bot.answer_callback_query(call.id)
+
+    elif action == "favtoggle":
+        m = re.match(r'favtoggle_(.+)_(\d+)$', full_data)
+        if not m or int(m.group(2)) != user_id:
+            bot.answer_callback_query(call.id, "Неверные данные.", show_alert=True)
+            return
+        anime_name = m.group(1)
+        user_favs = user_data.setdefault(user_str_id, {}).setdefault('favorites', [])
+        if anime_name in user_favs:
+            user_favs.remove(anime_name)
+            bot.answer_callback_query(call.id, f"{anime_name} удалено из избранного.")
         else:
-            favs.append(anime)
-            bot.answer_callback_query(call.id, f"Добавлено в избранное: {anime}")
+            user_favs.append(anime_name)
+            bot.answer_callback_query(call.id, f"{anime_name} добавлено в избранное.")
         save_user_data()
-        # Обновить клавиатуру
-        markup = generate_anime_keyboard(anime, int(user_id))
+        markup = generate_anime_keyboard(anime_name, user_id)
         bot.edit_message_reply_markup(call.message.chat.id, call.message.message_id, reply_markup=markup)
 
-    elif long_data.startswith("notiftoggle_"):
-        # Включить/отключить уведомления
-        anime = long_data[len("notiftoggle_"):].rsplit("_", 1)[0]
-        notifs = user_data.setdefault(user_id, {}).setdefault("notifications", [])
-        if anime in notifs:
-            notifs.remove(anime)
-            bot.answer_callback_query(call.id, f"Уведомления отключены для: {anime}")
+    elif action == "notiftoggle":
+        m = re.match(r'notiftoggle_(.+)_(\d+)$', full_data)
+        if not m or int(m.group(2)) != user_id:
+            bot.answer_callback_query(call.id, "Неверные данные.", show_alert=True)
+            return
+        anime_name = m.group(1)
+        user_notifs = user_data.setdefault(user_str_id, {}).setdefault('notifications', [])
+        if anime_name in user_notifs:
+            user_notifs.remove(anime_name)
+            bot.answer_callback_query(call.id, f"Уведомления для {anime_name} отключены.")
         else:
-            notifs.append(anime)
-            bot.answer_callback_query(call.id, f"Уведомления включены для: {anime}")
+            user_notifs.append(anime_name)
+            bot.answer_callback_query(call.id, f"Уведомления для {anime_name} включены.")
         save_user_data()
-        markup = generate_anime_keyboard(anime, int(user_id))
+        markup = generate_anime_keyboard(anime_name, user_id)
         bot.edit_message_reply_markup(call.message.chat.id, call.message.message_id, reply_markup=markup)
 
     else:
-        bot.answer_callback_query(call.id, "Неизвестное действие.")
+        bot.answer_callback_query(call.id, "Неизвестное действие.", show_alert=True)
 
-# ----------------------------------------
-# Запуск бота
+@bot.message_handler(func=lambda message: True)
+def handle_message(message):
+    query = message.text.strip().lower()
+    matched_anime = [a for a in anime_db if query in a.lower()]
+    if not matched_anime:
+        success = send_shikimori_info(message.chat.id, query)
+        if success:
+            bot.send_message(message.chat.id,
+                f"⚠️ Этого аниме нет в базе бота.\nЕсли хотите, чтобы его добавили, напишите сюда: @{ADMIN_ID}")
+        else:
+            bot.send_message(message.chat.id, "Аниме не найдено.")
+        return
+    user_id = message.from_user.id
+    markup = types.InlineKeyboardMarkup()
+    for anime in matched_anime:
+        btn_id = create_short_id(f"anime_{anime}_{user_id}")
+        markup.add(types.InlineKeyboardButton(anime, callback_data=btn_id))
+    bot.send_message(message.chat.id, "Выбери аниме:", reply_markup=markup)
+
 if __name__ == "__main__":
-    print("Бот запущен.")
-    bot.infinity_polling()
+    print("Бот запущен")
+    bot.polling(none_stop=True)
