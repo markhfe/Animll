@@ -8,8 +8,10 @@ import hashlib
 from io import StringIO
 from telebot import types
 
-bot = telebot.TeleBot("TELEGRAM_TOKEN")
-ADMIN_ID = "markhfe"  # Telegram username
+import os
+
+bot = telebot.TeleBot(os.getenv("TELEGRAM_TOKEN"))  # Получить токен из переменной окружения
+ADMIN_ID = os.getenv("TELEGRAM_ID")  # Получить id из переменной окружения
 
 def load_anime_db():
     url = "https://docs.google.com/spreadsheets/d/10dD8Hhf-uVxuloE6yy0p8hdswbW7xGrNR_6otJTbKuA/export?format=csv&gid=0"
