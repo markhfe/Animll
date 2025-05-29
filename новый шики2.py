@@ -8,7 +8,7 @@ import hashlib
 from io import StringIO
 from telebot import types
 
-bot = telebot.TeleBot("ID")
+bot = telebot.TeleBot("TELEGRAM_TOKEN")
 ADMIN_ID = "markhfe"  # Telegram username
 
 def load_anime_db():
