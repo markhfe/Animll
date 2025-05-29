@@ -57,17 +57,6 @@ def create_short_id(long_string):
     return short_id
 
 def send_shikimori_info(chat_id, title):
-    # ... остальной код без изменений ...
-
-    try:
-        # ... получение данных с API ...
-        description = anime_details.get('description', 'Описание недоступно.')
-
-        # Чистим описание от тегов [character=...][/character]
-        description = clean_description(description)
-
-        # ... дальше остальной код ...
-
     headers = {
         "User-Agent": ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
                        "AppleWebKit/537.36 (KHTML, like Gecko) "
@@ -119,7 +108,24 @@ def send_shikimori_info(chat_id, title):
                     anime_details = details_response.json()
 
         title_ru = anime_details.get('russian') or anime_details.get('name') or "Без названия"
-        description = anime_details.get('description', 'Описание недоступно.')
+        description_raw = anime_details.get('description', 'Описание недоступно.')
+
+        # --- Очищаем описание от HTML тегов ---
+        import re
+        description_text = re.sub(r'<[^>]+>', '', description_raw)  # удаляем все HTML теги
+
+        # --- Удаляем всё после ключевого слова "Персонажи" или "Characters" ---
+        cut_points = ['Персонажи', 'Characters', 'character', 'Персонаж', 'персонаж']
+        for point in cut_points:
+            idx = description_text.find(point)
+            if idx != -1:
+                description_text = description_text[:idx].strip()
+                break
+
+        # Можно дополнительно убрать пустые строки
+        description_lines = [line.strip() for line in description_text.split('\n') if line.strip()]
+        description_clean = "\n".join(description_lines)
+
         year = anime_details.get('aired_on')
         if year:
             year = year[:4]
@@ -132,7 +138,7 @@ def send_shikimori_info(chat_id, title):
         else:
             image_url = None
 
-        caption = f"🎬 <b>{title_ru}</b>\n📅 {year}\n\n📝 {description}"
+        caption = f"🎬 <b>{title_ru}</b>\n📅 {year}\n\n📝 {description_clean}"
 
         if image_url:
             bot.send_photo(chat_id, photo=image_url, caption=caption, parse_mode="HTML")
@@ -144,6 +150,7 @@ def send_shikimori_info(chat_id, title):
     except Exception as e:
         print(f"Ошибка при получении данных с Shikimori: {e}")
         return False
+
 
 def generate_episode_keyboard(anime, episode, user_id):
     markup = types.InlineKeyboardMarkup(row_width=3)
